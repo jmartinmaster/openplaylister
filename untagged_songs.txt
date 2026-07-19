@@ -1,0 +1,22 @@
+==================================================
+         UNTAGGED SONGS REPORT (FAILED RESOLVES)  
+==================================================
+Scanned: 53 | Successfully Tagged: 49 | Failed: 4
+--------------------------------------------------
+
+File: /home/jamie/Music_test_AI_generator/Alessandro Martire/Watch You Say Goodbye/01 Alessandro Martire,  - Watch You Say Goodbye.mp3
+  Artist: Alessandro Martire, BAILE, Ellyn Woods | Title: Watch You Say Goodbye
+  Reason: Track not found in MusicBrainz
+--------------------------------------------------
+File: /home/jamie/Music_test_AI_generator/Alan Menken/The Little Mermaid Special Edition/08 Pat Carroll, Disney - Poor Unfortunate Souls.mp3
+  Artist: Pat Carroll, Disney | Title: Poor Unfortunate Souls
+  Reason: Track not found in MusicBrainz
+--------------------------------------------------
+File: /home/jamie/Music_test_AI_generator/7hour flower/Baby/01 7hour flower - Baby.mp3
+  Artist: 7hour flower | Title: Baby
+  Reason: Track not found in MusicBrainz
+--------------------------------------------------
+File: /home/jamie/Music_test_AI_generator/1969 Collective/Fatal Line/01 1969 Collective, Hal - Fatal Line.mp3
+  Artist: 1969 Collective, Half Moon Run | Title: Fatal Line
+  Reason: Track not found in MusicBrainz
+--------------------------------------------------
