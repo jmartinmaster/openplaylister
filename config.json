@@ -1,8 +1,0 @@
-{
-    "music_dir": "/home/jamie/Music_test_AI_generator",
-    "listenbrainz_json": "/home/jamie/Documents/Github/openplaylister/fake_history.json",
-    "playlist_save_path": "/home/jamie/Documents/Github/openplaylister/playlist.m3u",
-    "theme": "light",
-    "num_workers": "16",
-    "num_gpus": "1"
-}

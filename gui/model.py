@@ -53,6 +53,8 @@ class OpenPlaylisterModel:
                     self.config.update(loaded)
             except Exception:
                 pass
+        else:
+            self.save_config()
 
     def save_config(self):
         try:

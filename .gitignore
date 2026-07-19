@@ -10,3 +10,6 @@ valid.txt
 train.txt
 *.m3u
 gui_index.json
+fake_history.json
+config.json
+untagged_songs.txt

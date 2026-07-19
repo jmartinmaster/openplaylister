@@ -57,11 +57,28 @@ def main():
     songs_by_mbid = {song["mbid"]: song for song in gui_songs}
 
     # Destination directory creation
-    dest_dir = os.path.dirname(os.path.abspath(args.playlist_path))
-    base_name = os.path.basename(args.playlist_path)
-    name, ext = os.path.splitext(base_name)
+    playlist_arg = args.playlist_path
+    if os.path.isdir(playlist_arg):
+        dest_dir = os.path.abspath(playlist_arg)
+        name = "Playlist"
+        ext = ".m3u"
+    else:
+        if not playlist_arg.lower().endswith(".m3u"):
+            dest_dir = os.path.abspath(playlist_arg)
+            name = "Playlist"
+            ext = ".m3u"
+        else:
+            dest_dir = os.path.dirname(os.path.abspath(playlist_arg))
+            base_name = os.path.basename(playlist_arg)
+            name, ext = os.path.splitext(base_name)
+            
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
+
+    # Current date and time suffix (e.g. 7_19_26_0831)
+    from datetime import datetime
+    now = datetime.now()
+    dt_suffix = f"{now.month}_{now.day}_{now.strftime('%y_%H%M')}"
 
     # Check for static library options
     if args.mode in ("full", "half"):
@@ -73,17 +90,18 @@ def main():
         if args.mode == "half":
             pool = pool[:max(1, len(pool) // 2)]
             
-        with open(args.playlist_path, "w") as f:
+        main_path = os.path.join(dest_dir, f"{name}_{args.mode}-{dt_suffix}{ext}")
+        with open(main_path, "w") as f:
             for path in pool:
                 f.write(path + "\n")
                 
         # Also save copy in 'standard' subfolder
         std_dir = os.path.join(dest_dir, "standard")
         os.makedirs(std_dir, exist_ok=True)
-        with open(os.path.join(std_dir, base_name), "w") as f:
+        with open(os.path.join(std_dir, f"{name}_{args.mode}-{dt_suffix}{ext}"), "w") as f:
             for path in pool:
                 f.write(path + "\n")
-        print(f"Library Playlist ({args.mode}) generated successfully! Saved to: {args.playlist_path}")
+        print(f"Library Playlist ({args.mode}) generated successfully! Saved to: {main_path}")
         return
 
     # Read generated MBIDs from stdin
@@ -133,17 +151,18 @@ def main():
             fallback_mbids = random.sample(all_keys, sample_size)
             playlist_paths = [indexmap[k] for k in fallback_mbids]
 
-        with open(args.playlist_path, "w") as f:
+        main_path = os.path.join(dest_dir, f"{name}-{dt_suffix}{ext}")
+        with open(main_path, "w") as f:
             for path in playlist_paths:
                 f.write(path + "\n")
                 
         # Also save copy in 'standard' subfolder
         std_dir = os.path.join(dest_dir, "standard")
         os.makedirs(std_dir, exist_ok=True)
-        with open(os.path.join(std_dir, base_name), "w") as f:
+        with open(os.path.join(std_dir, f"{name}-{dt_suffix}{ext}"), "w") as f:
             for path in playlist_paths:
                 f.write(path + "\n")
-        print(f"Playlist generated successfully! Saved to: {args.playlist_path}")
+        print(f"Playlist generated successfully! Saved to: {main_path}")
 
     elif args.mode == "cd":
         # CD-Safe: 80 minutes = 4800 seconds max per CD
@@ -163,7 +182,7 @@ def main():
                         used_paths.add(song["path"])
                         current_duration += duration
 
-            out_path = os.path.join(cd_dir, f"{name}_cd_{cd_idx}{ext}")
+            out_path = os.path.join(cd_dir, f"{name}_CD-{cd_idx}-{dt_suffix}{ext}")
             with open(out_path, "w") as f:
                 for path in playlist_paths:
                     f.write(path + "\n")
@@ -190,7 +209,7 @@ def main():
                             used_paths.add(song["path"])
                             current_duration += duration
 
-                out_path = os.path.join(cas_dir, f"{name}_cassette_{cas_idx}_{side}{ext}")
+                out_path = os.path.join(cas_dir, f"{name}_cassette-{cas_idx}-{side}-{dt_suffix}{ext}")
                 with open(out_path, "w") as f:
                     for path in playlist_paths:
                         f.write(path + "\n")

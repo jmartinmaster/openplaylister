@@ -236,8 +236,10 @@ class OpenPlaylisterController(QObject):
             self.update_statuses()
 
     def on_browse_playlist(self):
-        current_file = self.model.get_config_value("playlist_save_path")
-        path = self.view.save_file_dialog("Save Playlist File", "M3U Playlist (*.m3u)", current_file)
+        current_dir = self.model.get_config_value("playlist_save_path")
+        if current_dir and current_dir.endswith(".m3u"):
+            current_dir = os.path.dirname(current_dir)
+        path = self.view.select_directory("Select Playlist Output Root Folder", current_dir)
         if path:
             self.view.txt_playlist_path.setText(path)
             self.model.set_config_value("playlist_save_path", path)
@@ -500,6 +502,31 @@ class OpenPlaylisterController(QObject):
             if msg.clickedButton() == yes_btn:
                 self.on_run_preprocess()
             return
+
+        # Check for vocabulary shape mismatch with checkpoint_last.pt
+        checkpoint_path = os.path.join("checkpoints", "brainz", "checkpoint_last.pt")
+        if os.path.exists(checkpoint_path):
+            try:
+                # Count vocabulary size of dict.txt
+                with open(dict_path, "r") as f:
+                    current_vocab = sum(1 for line in f if line.strip()) + 4
+                
+                # Load checkpoint using PyTorch
+                import torch
+                state = torch.load(checkpoint_path, map_location="cpu")
+                if "model" in state and "decoder.embed_tokens.weight" in state["model"]:
+                    checkpoint_vocab = state["model"]["decoder.embed_tokens.weight"].shape[0]
+                    if current_vocab != checkpoint_vocab:
+                        self.view.console_logs.appendPlainText(
+                            f">>> Vocabulary size mismatch detected (checkpoint: {checkpoint_vocab}, current: {current_vocab}). "
+                            "Wiping old checkpoints to prevent training failure..."
+                        )
+                        import shutil
+                        checkpoints_dir = os.path.abspath("checkpoints/brainz")
+                        shutil.rmtree(checkpoints_dir)
+                        os.makedirs(checkpoints_dir, exist_ok=True)
+            except Exception as e:
+                self.view.console_logs.appendPlainText(f">>> Warning checking checkpoint compatibility: {str(e)}")
 
         self.view.console_logs.clear()
         

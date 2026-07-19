@@ -31,6 +31,69 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont, QColor
 
+class TrainingGridWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lit_count = 0
+        self.setMinimumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        self.rows = 50
+        self.cols = 200
+        
+        self.order = []
+        for r in range(self.rows):
+            for c in range(self.cols):
+                self.order.append((r, c))
+        import random
+        rng = random.Random(42)
+        rng.shuffle(self.order)
+        
+        # Pre-map coordinates to their random activation index for fast O(1) lookup
+        self.cell_indices = [[0]*self.cols for _ in range(self.rows)]
+        for idx, (r, c) in enumerate(self.order):
+            self.cell_indices[r][c] = idx
+        
+    def set_progress(self, value, maximum):
+        if maximum > 0:
+            ratio = value / maximum
+        else:
+            ratio = 0.0
+        self.lit_count = int(max(0.0, min(1.0, ratio)) * (self.rows * self.cols))
+        self.update()
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QBrush, QColor, QPen
+        painter = QPainter(self)
+        
+        width = self.width()
+        height = self.height()
+        
+        spacing = 1
+        total_spacing_w = spacing * (self.cols + 1)
+        total_spacing_h = spacing * (self.rows + 1)
+        
+        cell_width = (width - total_spacing_w) / self.cols
+        cell_height = (height - total_spacing_h) / self.rows
+        
+        for r in range(self.rows):
+            for c in range(self.cols):
+                x = spacing + c * (cell_width + spacing)
+                y = spacing + r * (cell_height + spacing)
+                
+                is_lit = self.cell_indices[r][c] < self.lit_count
+                
+                if is_lit:
+                    color = QColor("#4f46e5")
+                    border_color = QColor("#6366f1")
+                else:
+                    color = QColor("#1e293b")
+                    border_color = QColor("#334155")
+                
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(border_color, 0.5))
+                painter.drawRect(int(x), int(y), int(cell_width), int(cell_height))
+
 class MainWindow(QMainWindow):
     # Signals for Controller to listen to
     nav_changed = pyqtSignal(int)
@@ -430,7 +493,13 @@ class MainWindow(QMainWindow):
         
         self.train_progress = QProgressBar()
         self.train_progress.setValue(0)
+        self.train_progress.valueChanged.connect(self.on_train_progress_changed)
         tpc_layout.addWidget(self.train_progress)
+        
+        # Neural grid progress widget
+        self.grid_progress = TrainingGridWidget()
+        self.grid_progress.setVisible(False)
+        tpc_layout.addWidget(self.grid_progress)
         
         layout.addWidget(self.train_progress_card)
         
@@ -606,7 +675,7 @@ class MainWindow(QMainWindow):
         form_layout.addWidget(self.btn_browse_json, 1, 2)
         
         # Row 3: Playlist Save Location
-        form_layout.addWidget(QLabel("Playlist Save Path (.m3u):"), 2, 0)
+        form_layout.addWidget(QLabel("Playlist Output Root Folder:"), 2, 0)
         self.txt_playlist_path = QLineEdit()
         form_layout.addWidget(self.txt_playlist_path, 2, 1)
         self.btn_browse_playlist = QPushButton("Browse...")
@@ -662,13 +731,23 @@ class MainWindow(QMainWindow):
         self.content_stack.addWidget(page)
 
     def on_toggle_console_log(self):
-        is_visible = self.console_logs.isVisible()
-        self.console_logs.setVisible(not is_visible)
-        self.console_lbl.setVisible(not is_visible)
-        if is_visible:
-            self.btn_toggle_logs.setText("Show Console Log")
-        else:
+        show_console = not self.console_logs.isVisible()
+        
+        self.console_logs.setVisible(show_console)
+        self.console_lbl.setVisible(show_console)
+        
+        # Standard progress bar shows when console is shown, hides when console is hidden
+        self.train_progress.setVisible(show_console)
+        # Dynamic grid progress shows when console is hidden, hides when console is shown
+        self.grid_progress.setVisible(not show_console)
+        
+        if show_console:
             self.btn_toggle_logs.setText("Hide Console Log")
+        else:
+            self.btn_toggle_logs.setText("Show Console Log")
+
+    def on_train_progress_changed(self, value):
+        self.grid_progress.set_progress(value, self.train_progress.maximum())
 
     def create_playlist_edit_page(self):
         page = QWidget()
