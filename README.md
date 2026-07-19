@@ -36,7 +36,7 @@ OpenPlaylister requires:
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/jamie/openplaylister.git
+   git clone https://github.com/jmartinmaster/openplaylister.git
    cd openplaylister
    ```
 
@@ -110,5 +110,5 @@ If you prefer running commands directly in the shell:
 ## License
 
 This project is licensed under the GPLv3 License (with MIT-licensed components).
-- For the full license terms of the main project, see [LICENSE](file:///home/jamie/Documents/Github/openplaylister/LICENSE).
-- For MIT portions, see [LICENSE.MIT](file:///home/jamie/Documents/Github/openplaylister/LICENSE.MIT).
+- For the full license terms of the main project, see [LICENSE](LICENSE).
+- For MIT portions, see [LICENSE.MIT](LICENSE.MIT).
