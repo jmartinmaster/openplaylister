@@ -79,6 +79,7 @@ def scan_music(music_dir):
 
             mbid = None
             artist = ""
+            album = ""
             title = ""
 
             # Check files by extension
@@ -91,9 +92,11 @@ def scan_music(music_dir):
                 elif "UFID:http://musicbrainz.org" in taginfo:
                     mbid = taginfo["UFID:http://musicbrainz.org"].data.decode('utf-8', errors='ignore')
 
-                # Parse artist and title tags
+                # Parse artist, album, and title tags
                 if "TPE1" in taginfo:
                     artist = taginfo["TPE1"].text[0]
+                if "TALB" in taginfo:
+                    album = taginfo["TALB"].text[0]
                 if "TIT2" in taginfo:
                     title = taginfo["TIT2"].text[0]
 
@@ -105,14 +108,18 @@ def scan_music(music_dir):
 
                 if "artist" in taginfo:
                     artist = taginfo["artist"][0]
+                if "album" in taginfo:
+                    album = taginfo["album"][0]
                 if "title" in taginfo:
                     title = taginfo["title"][0]
 
             # Fallback to directory structure/filename parsing if tags are missing
-            if not artist or not title:
-                guessed_artist, guessed_title = extract_metadata_from_path(file_path, music_dir)
+            if not artist or not album or not title:
+                guessed_artist, guessed_album, guessed_title = extract_metadata_from_path(file_path, music_dir)
                 if not artist and guessed_artist:
                     artist = guessed_artist
+                if not album and guessed_album:
+                    album = guessed_album
                 if not title and guessed_title:
                     title = guessed_title
 
@@ -129,6 +136,7 @@ def scan_music(music_dir):
                     "mbid": mbid,
                     "path": file_path,
                     "artist": artist if artist else "Unknown Artist",
+                    "album": album if album else "Unknown Album",
                     "title": title if title else os.path.basename(file_path),
                     "duration": duration
                 }
@@ -140,6 +148,7 @@ def scan_music(music_dir):
                     "mbid": song_data["mbid"],
                     "path": song_data["path"],
                     "artist": song_data["artist"],
+                    "album": song_data["album"],
                     "title": song_data["title"]
                 })
         except Exception as e:

@@ -13,3 +13,4 @@ gui_index.json
 fake_history.json
 config.json
 untagged_songs.txt
+temp_*/

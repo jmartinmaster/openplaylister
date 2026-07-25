@@ -49,6 +49,7 @@ def extract_metadata_from_path(file_path, music_dir):
     cleaned_filename = clean_track_prefix(filename_no_ext)
     
     artist = ""
+    album = ""
     title = ""
     
     # Split cleaned filename on separator " - "
@@ -57,6 +58,8 @@ def extract_metadata_from_path(file_path, music_dir):
     if len(parts) >= 3:
         # Structure matches: Artist/Album/Filename (e.g., AJR/OK ORCHESTRA/11 AJR - World's Smallest Violin.mp3)
         artist_folder = parts[-3].strip()
+        album_folder = parts[-2].strip()
+        album = album_folder
         
         if len(file_parts) >= 2:
             left = file_parts[0].strip()
@@ -76,6 +79,7 @@ def extract_metadata_from_path(file_path, music_dir):
     elif len(parts) == 2:
         # Structure matches: Artist/Filename
         artist_folder = parts[-2].strip()
+        album = artist_folder
         
         if len(file_parts) >= 2:
             left = file_parts[0].strip()
@@ -98,5 +102,5 @@ def extract_metadata_from_path(file_path, music_dir):
         else:
             title = cleaned_filename
             
-    return artist.strip(), title.strip()
+    return artist.strip(), album.strip(), title.strip()
 

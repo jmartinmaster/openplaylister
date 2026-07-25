@@ -38,7 +38,8 @@ class OpenPlaylisterModel:
             "playlist_save_path": os.path.abspath("playlist.m3u"),
             "theme": "dark",
             "num_workers": "1",
-            "num_gpus": "1"
+            "num_gpus": "1",
+            "train_level": 30000
         }
         
         self.songs_list = [] # List of dicts: {mbid, path, artist, title}
@@ -79,8 +80,10 @@ class OpenPlaylisterModel:
                 with open(self.gui_index_file, "r") as f:
                     self.songs_list = json.load(f)
                 
-                # Dynamic upgrade: if duration is missing or default, resolve it
+                # Dynamic upgrade: if duration or album is missing or default, resolve it
                 needs_save = False
+                from gui.metadata_helper import extract_metadata_from_path
+                music_dir = self.get_config_value("music_dir")
                 for song in self.songs_list:
                     if "duration" not in song or song["duration"] == 240.0:
                         path = song["path"]
@@ -92,6 +95,29 @@ class OpenPlaylisterModel:
                                     needs_save = True
                             except Exception:
                                 pass
+                    if "album" not in song or not song["album"] or song["album"] == "Unknown Album":
+                        path = song["path"]
+                        resolved_album = ""
+                        if os.path.exists(path):
+                            try:
+                                taginfo = mutagen.File(path)
+                                if taginfo:
+                                    if path.lower().endswith(".mp3") and "TALB" in taginfo:
+                                        resolved_album = taginfo["TALB"].text[0]
+                                    elif path.lower().endswith(".flac") and "album" in taginfo:
+                                        resolved_album = taginfo["album"][0]
+                            except Exception:
+                                pass
+                        if not resolved_album:
+                            _a, g_album, _t = extract_metadata_from_path(path, music_dir)
+                            resolved_album = g_album
+                        if resolved_album:
+                            song["album"] = resolved_album
+                            needs_save = True
+                        elif "album" not in song:
+                            song["album"] = "Unknown Album"
+                            needs_save = True
+
                 if needs_save:
                     self.save_gui_index()
                 return
@@ -101,6 +127,8 @@ class OpenPlaylisterModel:
         # Fallback to rebuild gui_index_file from file_index.json if present
         if os.path.exists(self.index_file):
             try:
+                from gui.metadata_helper import extract_metadata_from_path
+                music_dir = self.get_config_value("music_dir")
                 with open(self.index_file, "r") as f:
                     raw_index = json.load(f)
                 
@@ -108,6 +136,7 @@ class OpenPlaylisterModel:
                 for mbid, path in raw_index.items():
                     if os.path.exists(path):
                         artist = ""
+                        album = ""
                         title = ""
                         duration = 240.0
                         try:
@@ -117,17 +146,26 @@ class OpenPlaylisterModel:
                                     duration = taginfo.info.length
                                 if path.lower().endswith(".mp3"):
                                     if "TPE1" in taginfo: artist = taginfo["TPE1"].text[0]
+                                    if "TALB" in taginfo: album = taginfo["TALB"].text[0]
                                     if "TIT2" in taginfo: title = taginfo["TIT2"].text[0]
                                 elif path.lower().endswith(".flac"):
                                     if "artist" in taginfo: artist = taginfo["artist"][0]
+                                    if "album" in taginfo: album = taginfo["album"][0]
                                     if "title" in taginfo: title = taginfo["title"][0]
                         except Exception:
                             pass
+
+                        if not artist or not album or not title:
+                            g_artist, g_album, g_title = extract_metadata_from_path(path, music_dir)
+                            if not artist and g_artist: artist = g_artist
+                            if not album and g_album: album = g_album
+                            if not title and g_title: title = g_title
                         
                         self.songs_list.append({
                             "mbid": mbid,
                             "path": path,
                             "artist": artist if artist else "Unknown Artist",
+                            "album": album if album else "Unknown Album",
                             "title": title if title else os.path.basename(path),
                             "duration": duration
                         })

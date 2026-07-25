@@ -23,6 +23,7 @@ import os
 import json
 import sys
 import uuid
+import re
 import argparse
 import random
 from collections import OrderedDict
@@ -36,8 +37,12 @@ def get_split_path(base_path, suffix):
 def main():
     parser = argparse.ArgumentParser(description="Write generated sequence to .m3u playlist files with CD and Cassette constraints.")
     parser.add_argument("playlist_path", nargs="?", default="playlist.m3u")
-    parser.add_argument("--mode", default="standard", choices=["standard", "cd", "c60", "c90", "full", "half"])
+    parser.add_argument("--mode", default="standard", choices=["standard", "cd", "c60", "c90", "full", "half", "artist", "album", "custom"])
     parser.add_argument("--count", type=int, default=1)
+    parser.add_argument("--artist", type=str, default=None, help="Target artist name for artist mode")
+    parser.add_argument("--album", type=str, default=None, help="Target album name for album mode")
+    parser.add_argument("--seed-mbid", type=str, default=None, help="Seed track MBID to extract target artist/album")
+    parser.add_argument("--tracks-file", type=str, default=None, help="Path to file containing newline-separated track paths for custom mode")
     args = parser.parse_args()
 
     # Load indices
@@ -52,6 +57,13 @@ def main():
             gui_songs = json.load(f)
     except Exception:
         gui_songs = []
+
+    # Ensure all songs have album metadata
+    from gui.metadata_helper import extract_metadata_from_path
+    for song in gui_songs:
+        if "album" not in song or not song["album"]:
+            _a, g_album, _t = extract_metadata_from_path(song["path"], "")
+            song["album"] = g_album if g_album else "Unknown Album"
 
     # Map MBID to song metadata
     songs_by_mbid = {song["mbid"]: song for song in gui_songs}
@@ -102,6 +114,137 @@ def main():
             for path in pool:
                 f.write(path + "\n")
         print(f"Library Playlist ({args.mode}) generated successfully! Saved to: {main_path}")
+        return
+
+    # Check for Custom queued playlist mode
+    if args.mode == "custom":
+        playlist_paths = []
+        if args.tracks_file and os.path.exists(args.tracks_file):
+            with open(args.tracks_file, "r") as f:
+                playlist_paths = [line.strip() for line in f if line.strip()]
+        else:
+            inp = sys.stdin.read()
+            playlist_paths = [line.strip() for line in inp.splitlines() if line.strip()]
+
+        main_path = os.path.join(dest_dir, f"{name}_Queued-{dt_suffix}{ext}")
+        with open(main_path, "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        std_dir = os.path.join(dest_dir, "standard")
+        os.makedirs(std_dir, exist_ok=True)
+        with open(os.path.join(std_dir, f"{name}_Queued-{dt_suffix}{ext}"), "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        print(f"Queued Playlist generated successfully! ({len(playlist_paths)} tracks) Saved to: {main_path}")
+        return
+
+    # Check for Single Artist mode
+    if args.mode == "artist":
+        target_artist = args.artist
+        if not target_artist and args.seed_mbid and args.seed_mbid in songs_by_mbid:
+            target_artist = songs_by_mbid[args.seed_mbid].get("artist")
+            
+        if not target_artist:
+            # Read MBID from stdin if available
+            inp = sys.stdin.read()
+            for word in inp.split():
+                try:
+                    m = str(uuid.UUID(word))
+                    if m in songs_by_mbid:
+                        target_artist = songs_by_mbid[m].get("artist")
+                        break
+                except Exception:
+                    continue
+
+        if not target_artist:
+            print("Error: No artist specified or found in seed for artist mode playlist.")
+            sys.exit(1)
+
+        target_lower = target_artist.strip().lower()
+        matching_songs = [s for s in gui_songs if s.get("artist", "").strip().lower() == target_lower]
+        if not matching_songs:
+            matching_songs = [s for s in gui_songs if target_lower in s.get("artist", "").strip().lower()]
+
+        matching_songs.sort(key=lambda s: (s.get("album", "").lower(), os.path.basename(s["path"]).lower()))
+        playlist_paths = [s["path"] for s in matching_songs]
+
+        clean_artist = re.sub(r'[^\w\-_]', '_', target_artist)
+        main_path = os.path.join(dest_dir, f"{name}_Artist_{clean_artist}-{dt_suffix}{ext}")
+        with open(main_path, "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        std_dir = os.path.join(dest_dir, "standard")
+        os.makedirs(std_dir, exist_ok=True)
+        with open(os.path.join(std_dir, f"{name}_Artist_{clean_artist}-{dt_suffix}{ext}"), "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        print(f"Artist Playlist ('{target_artist}') generated successfully! ({len(playlist_paths)} tracks) Saved to: {main_path}")
+        return
+
+    # Check for Recreate Album mode
+    if args.mode == "album":
+        target_album = args.album
+        target_artist = args.artist
+        if args.seed_mbid and args.seed_mbid in songs_by_mbid:
+            seed_song = songs_by_mbid[args.seed_mbid]
+            if not target_album:
+                target_album = seed_song.get("album")
+            if not target_artist:
+                target_artist = seed_song.get("artist")
+
+        if not target_album:
+            inp = sys.stdin.read()
+            for word in inp.split():
+                try:
+                    m = str(uuid.UUID(word))
+                    if m in songs_by_mbid:
+                        target_album = songs_by_mbid[m].get("album")
+                        if not target_artist:
+                            target_artist = songs_by_mbid[m].get("artist")
+                        break
+                except Exception:
+                    continue
+
+        if not target_album:
+            print("Error: No album specified or found in seed for album mode playlist.")
+            sys.exit(1)
+
+        album_lower = target_album.strip().lower()
+        if target_artist:
+            artist_lower = target_artist.strip().lower()
+            matching_songs = [
+                s for s in gui_songs
+                if s.get("album", "").strip().lower() == album_lower and s.get("artist", "").strip().lower() == artist_lower
+            ]
+            if not matching_songs:
+                matching_songs = [s for s in gui_songs if s.get("album", "").strip().lower() == album_lower]
+        else:
+            matching_songs = [s for s in gui_songs if s.get("album", "").strip().lower() == album_lower]
+
+        def natural_sort_key(song):
+            filename = os.path.basename(song["path"])
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', filename)]
+
+        matching_songs.sort(key=natural_sort_key)
+        playlist_paths = [s["path"] for s in matching_songs]
+
+        clean_album = re.sub(r'[^\w\-_]', '_', target_album)
+        main_path = os.path.join(dest_dir, f"{name}_Album_{clean_album}-{dt_suffix}{ext}")
+        with open(main_path, "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        std_dir = os.path.join(dest_dir, "standard")
+        os.makedirs(std_dir, exist_ok=True)
+        with open(os.path.join(std_dir, f"{name}_Album_{clean_album}-{dt_suffix}{ext}"), "w") as f:
+            for path in playlist_paths:
+                f.write(path + "\n")
+
+        print(f"Album Playlist ('{target_album}') generated successfully! ({len(playlist_paths)} tracks) Saved to: {main_path}")
         return
 
     # Read generated MBIDs from stdin

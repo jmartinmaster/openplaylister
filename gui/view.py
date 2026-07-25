@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QLabel, QStackedWidget, QLineEdit, QProgressBar, QTableWidget,
     QTableWidgetItem, QHeaderView, QPlainTextEdit, QFileDialog, QComboBox,
     QGridLayout, QAbstractItemView, QSizePolicy, QFormLayout,
-    QSpinBox, QCheckBox
+    QSpinBox, QCheckBox, QTabWidget, QScrollArea
 )
 from PyQt6.QtGui import QFont, QColor
 
@@ -116,9 +116,18 @@ class MainWindow(QMainWindow):
     load_playlist_clicked = pyqtSignal()
     save_playlist_clicked = pyqtSignal()
     
+    burn_browse_playlist_clicked = pyqtSignal()
+    run_convert_wav_clicked = pyqtSignal()
+    run_burn_cd_clicked = pyqtSignal()
+    run_burn_drive_clicked = pyqtSignal(str) # dev_path
+    stop_burn_clicked = pyqtSignal()
+    eject_drive_clicked = pyqtSignal(str)
+    rescan_drives_clicked = pyqtSignal()
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("OpenPlaylister AI")
+        self.setMinimumSize(950, 600)
         self.resize(1100, 750)
         self.init_ui()
 
@@ -166,8 +175,9 @@ class MainWindow(QMainWindow):
             ("🎵 Music Scanner", 1),
             ("🧠 AI Model Training", 2),
             ("🪄 Playlist Generator", 3),
-            ("📝 Edit Playlist", 4),
-            ("⚙️ Settings", 5),
+            ("💿 Burn CD", 4),
+            ("📝 Edit Playlist", 5),
+            ("⚙️ Settings", 6),
         ]
         
         for text, index in nav_items:
@@ -245,12 +255,21 @@ class MainWindow(QMainWindow):
         self.create_scanner_page()
         self.create_training_page()
         self.create_generator_page()
+        self.create_burn_cd_page()
         self.create_playlist_edit_page()
         self.create_settings_page()
 
     def handle_nav(self, index):
         self.content_stack.setCurrentIndex(index)
         self.nav_changed.emit(index)
+
+    def add_page_to_stack(self, page):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self.content_stack.addWidget(scroll)
 
     # ----------------------------------------------------
     # Page Creation Helpers
@@ -346,7 +365,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(info_frame)
         
         layout.addStretch()
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
 
     def create_scanner_page(self):
         page = QWidget()
@@ -434,7 +453,7 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(self.table_songs)
         
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
 
     def create_training_page(self):
         page = QWidget()
@@ -531,7 +550,7 @@ class MainWindow(QMainWindow):
         log_btn_layout.addStretch()
         layout.addLayout(log_btn_layout)
         
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
 
     def create_generator_page(self):
         page = QWidget()
@@ -562,8 +581,8 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.txt_seed_search)
         
         self.table_seed_songs = QTableWidget()
-        self.table_seed_songs.setColumnCount(3)
-        self.table_seed_songs.setHorizontalHeaderLabels(["Title", "Artist", "MusicBrainz ID"])
+        self.table_seed_songs.setColumnCount(4)
+        self.table_seed_songs.setHorizontalHeaderLabels(["Title", "Artist", "Album", "MusicBrainz ID"])
         self.table_seed_songs.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_seed_songs.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table_seed_songs.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -571,33 +590,47 @@ class MainWindow(QMainWindow):
         s_header = self.table_seed_songs.horizontalHeader()
         s_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         s_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        s_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.table_seed_songs.setColumnWidth(2, 220)
+        s_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        s_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.table_seed_songs.setColumnWidth(3, 180)
         
         left_layout.addWidget(self.table_seed_songs)
-        splits_layout.addWidget(left_frame, 2)
+
+        # Action Buttons to append selected items directly to playlist builder
+        queue_btns_layout = QHBoxLayout()
+        self.btn_add_album = QPushButton("+ Add Album")
+        self.btn_add_artist = QPushButton("+ Add Artist")
+        self.btn_add_track = QPushButton("+ Add Track")
+        queue_btns_layout.addWidget(self.btn_add_album)
+        queue_btns_layout.addWidget(self.btn_add_artist)
+        queue_btns_layout.addWidget(self.btn_add_track)
+        left_layout.addLayout(queue_btns_layout)
+
+        splits_layout.addWidget(left_frame, 3)
         
-        # Right Panel - Generator Controls
+        # Right Panel - Step 2 (Generator & Builder) and Step 3 (Save Playlist)
         right_frame = QFrame()
         right_frame.setObjectName("card")
         right_layout = QVBoxLayout(right_frame)
-        right_layout.addWidget(QLabel("<b>2. Generator Execution</b>"))
+        right_layout.setSpacing(12)
         
-        # Selected Track Display
+        right_layout.addWidget(QLabel("<b>2. Generate & Populate Playlist</b>"))
+        
+        # Selected Seed Display
         self.lbl_selected_seed = QLabel("No Seed Track Selected")
         self.lbl_selected_seed.setWordWrap(True)
-        self.lbl_selected_seed.setStyleSheet("font-size: 14px; font-weight: bold; padding: 12px; background-color: rgba(99, 102, 241, 0.1); border-radius: 8px;")
+        self.lbl_selected_seed.setStyleSheet("font-size: 13px; font-weight: bold; padding: 8px; background-color: rgba(99, 102, 241, 0.1); border-radius: 6px;")
         right_layout.addWidget(self.lbl_selected_seed)
         
-        right_layout.addSpacing(16)
-        
-        # Playlist generation mode options
+        # Mode execution options
         opts_layout = QFormLayout()
-        opts_layout.setSpacing(10)
+        opts_layout.setSpacing(6)
         
         self.combo_gen_mode = QComboBox()
         self.combo_gen_mode.addItems([
             "Standard AI Playlist",
+            "Single Artist",
+            "Recreate Album",
             "CD Safe (80 Minutes)",
             "Cassette C60 (30 Mins / Side)",
             "Cassette C90 (45 Mins / Side)",
@@ -614,29 +647,99 @@ class MainWindow(QMainWindow):
         right_layout.addLayout(opts_layout)
 
         self.chk_randomize = QCheckBox("Randomize recommendations (unique playlists)")
-        self.chk_randomize.setStyleSheet("margin-top: 6px; margin-bottom: 6px;")
+        self.chk_randomize.setStyleSheet("margin-top: 2px; margin-bottom: 2px;")
         right_layout.addWidget(self.chk_randomize)
 
-        # Generate Action Buttons
-        self.btn_generate = QPushButton("Generate Playlist")
-        self.btn_generate.setObjectName("primary_btn")
+        # Generate / Populate Action Button
+        self.btn_generate = QPushButton("⚡ Generate Playlist Tracks")
         self.btn_generate.setEnabled(False)
         right_layout.addWidget(self.btn_generate)
+
+        # Album Completeness & Disc Capacity Meter Card
+        capacity_card = QFrame()
+        capacity_card.setStyleSheet("background-color: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 6px; padding: 8px;")
+        cap_layout = QVBoxLayout(capacity_card)
+        cap_layout.setSpacing(4)
+
+        self.lbl_album_info = QLabel("Album Availability: Select a track to check album completeness.")
+        self.lbl_album_info.setWordWrap(True)
+        self.lbl_album_info.setStyleSheet("font-size: 12px; color: #cbd5e1;")
+        cap_layout.addWidget(self.lbl_album_info)
+
+        self.lbl_disc_capacity = QLabel("CD Capacity: 0m 0s / 80:00 (80m 0s remaining - 0% full)")
+        self.lbl_disc_capacity.setStyleSheet("font-size: 12px; font-weight: bold; color: #818cf8;")
+        cap_layout.addWidget(self.lbl_disc_capacity)
+
+        self.progress_disc_capacity = QProgressBar()
+        self.progress_disc_capacity.setRange(0, 4800) # 80 min CD limit in seconds
+        self.progress_disc_capacity.setValue(0)
+        self.progress_disc_capacity.setFormat("%v / %m secs")
+        self.progress_disc_capacity.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #334155;
+                background-color: #0f172a;
+                border-radius: 4px;
+                text-align: center;
+                height: 18px;
+                color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #6366f1;
+                border-radius: 3px;
+            }
+        """)
+        cap_layout.addWidget(self.progress_disc_capacity)
+        right_layout.addWidget(capacity_card)
+
+        # Playlist Tracks Table
+        right_layout.addWidget(QLabel("<b>Playlist Tracks Table</b>"))
+        self.table_playlist_queue = QTableWidget()
+        self.table_playlist_queue.setColumnCount(5)
+        self.table_playlist_queue.setHorizontalHeaderLabels(["#", "Title", "Artist", "Album", "Duration"])
+        self.table_playlist_queue.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_playlist_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table_playlist_queue.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_playlist_queue.setMaximumHeight(150)
         
-        self.lbl_generation_status = QLabel("Select a seed song to enable playlist generation.")
+        q_header = self.table_playlist_queue.horizontalHeader()
+        q_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        q_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        q_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        q_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        q_header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        right_layout.addWidget(self.table_playlist_queue)
+
+        # Table management buttons
+        tbl_btn_layout = QHBoxLayout()
+        self.btn_remove_queued = QPushButton("❌ Remove Track")
+        self.btn_clear_queue = QPushButton("🗑️ Clear List")
+        tbl_btn_layout.addWidget(self.btn_remove_queued)
+        tbl_btn_layout.addWidget(self.btn_clear_queue)
+        right_layout.addLayout(tbl_btn_layout)
+
+        right_layout.addSpacing(8)
+        
+        # Step 3 - Save Playlist Section
+        right_layout.addWidget(QLabel("<b>3. Save Playlist</b>"))
+        self.btn_generate_queued = QPushButton("💾 Save Playlist")
+        self.btn_generate_queued.setObjectName("primary_btn")
+        right_layout.addWidget(self.btn_generate_queued)
+
+        self.lbl_generation_status = QLabel("Select a seed song and click 'Generate Playlist Tracks' or add items to populate the list.")
         self.lbl_generation_status.setWordWrap(True)
         right_layout.addWidget(self.lbl_generation_status)
         
-        # Output Playlist Log
-        right_layout.addWidget(QLabel("<b>Generation Log</b>"))
+        # Output Log
+        right_layout.addWidget(QLabel("<b>Console Log</b>"))
         self.gen_console = QPlainTextEdit()
         self.gen_console.setReadOnly(True)
+        self.gen_console.setMaximumHeight(90)
         right_layout.addWidget(self.gen_console)
         
-        splits_layout.addWidget(right_frame, 1)
+        splits_layout.addWidget(right_frame, 3)
         
         layout.addLayout(splits_layout)
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
 
     def create_settings_page(self):
         page = QWidget()
@@ -718,6 +821,18 @@ class MainWindow(QMainWindow):
         self.combo_workers.addItems(["1", "2", "4", "8", "12", "16", "20", "24"])
         form_layout.addWidget(self.combo_workers, 5, 1, 1, 2)
         
+        # Row 7: AI Training Cycle Level
+        form_layout.addWidget(QLabel("AI Training Cycle Level:"), 6, 0)
+        self.combo_train_level = QComboBox()
+        self.combo_train_level.addItems([
+            "Minimal (5,000 cycles)",
+            "Light (15,000 cycles)",
+            "Standard (30,000 cycles)",
+            "Thorough (50,000 cycles)",
+            "Deep (100,000 cycles)"
+        ])
+        form_layout.addWidget(self.combo_train_level, 6, 1, 1, 2)
+        
         sc_layout.addLayout(form_layout)
         
         # Save Action Button
@@ -728,7 +843,7 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(settings_card)
         layout.addStretch()
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
 
     def on_toggle_console_log(self):
         show_console = not self.console_logs.isVisible()
@@ -815,7 +930,291 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(btn_layout)
         
-        self.content_stack.addWidget(page)
+        self.add_page_to_stack(page)
+
+    def create_burn_cd_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(32, 32, 32, 32)
+        layout.setSpacing(16)
+        
+        # Title
+        title_lbl = QLabel("CD Burning & WAV Conversion")
+        title_lbl.setObjectName("title")
+        layout.addWidget(title_lbl)
+        
+        # Horizontal Split: Left (Tracks List) | Right (Settings & verification)
+        splits_layout = QHBoxLayout()
+        splits_layout.setSpacing(20)
+        
+        # Left Panel (Playlist Tracks Table)
+        left_frame = QFrame()
+        left_frame.setObjectName("card")
+        left_layout = QVBoxLayout(left_frame)
+        left_layout.setContentsMargins(16, 16, 16, 16)
+        
+        pl_row = QHBoxLayout()
+        pl_row.addWidget(QLabel("<b>Selected Playlist:</b>"))
+        self.txt_burn_playlist_path = QLineEdit()
+        self.txt_burn_playlist_path.setReadOnly(True)
+        pl_row.addWidget(self.txt_burn_playlist_path)
+        self.btn_burn_browse_playlist = QPushButton("Browse...")
+        self.btn_burn_browse_playlist.clicked.connect(self.burn_browse_playlist_clicked.emit)
+        pl_row.addWidget(self.btn_burn_browse_playlist)
+        left_layout.addLayout(pl_row)
+        
+        # Tracks Table
+        self.table_burn_tracks = QTableWidget()
+        self.table_burn_tracks.setColumnCount(5)
+        self.table_burn_tracks.setHorizontalHeaderLabels(["#", "Title", "Artist", "Duration", "Status"])
+        self.table_burn_tracks.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table_burn_tracks.horizontalHeader().setStretchLastSection(True)
+        self.table_burn_tracks.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_burn_tracks.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        left_layout.addWidget(self.table_burn_tracks)
+        
+        splits_layout.addWidget(left_frame, 3)
+        
+        # Right Panel (Settings & Verification)
+        right_frame = QFrame()
+        right_frame.setObjectName("card")
+        right_layout = QVBoxLayout(right_frame)
+        right_layout.setContentsMargins(16, 16, 16, 16)
+        right_layout.setSpacing(16)
+        
+        right_layout.addWidget(QLabel("<b>Secondary verification:</b>"))
+        
+        self.lbl_burn_summary = QLabel("Total Tracks: 0\nTotal Duration: 0 mins\nStatus: Empty Playlist")
+        self.lbl_burn_summary.setStyleSheet("font-size: 13px; color: #94a3b8; line-height: 1.4;")
+        right_layout.addWidget(self.lbl_burn_summary)
+        
+        # CD Capacity Progress bar/meter
+        self.burn_capacity_progress = QProgressBar()
+        self.burn_capacity_progress.setRange(0, 4800) # 80 min default
+        self.burn_capacity_progress.setValue(0)
+        self.burn_capacity_progress.setFormat("%v / %m secs")
+        self.burn_capacity_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #334155;
+                background-color: #0f172a;
+                border-radius: 4px;
+                text-align: center;
+                color: #f8fafc;
+            }
+            QProgressBar::chunk {
+                background-color: #10b981;
+                border-radius: 3px;
+            }
+        """)
+        right_layout.addWidget(self.burn_capacity_progress)
+        
+        self.lbl_burn_status = QLabel("Ready")
+        self.lbl_burn_status.setObjectName("status_ready")
+        self.lbl_burn_status.setStyleSheet("font-weight: bold; color: #10b981; font-size: 14px;")
+        right_layout.addWidget(self.lbl_burn_status)
+        
+        # Burn configuration form (3 high x 2 wide grid layout)
+        grid_opts = QGridLayout()
+        grid_opts.setSpacing(10)
+        grid_opts.setContentsMargins(0, 4, 0, 8)
+        
+        # 1. Target CD Capacity
+        self.combo_cd_capacity = QComboBox()
+        self.combo_cd_capacity.addItem("80 Min (700MB)")
+        self.combo_cd_capacity.setItemData(0, "80 Min (700MB) / 4800 seconds max capacity", Qt.ItemDataRole.ToolTipRole)
+        self.combo_cd_capacity.addItem("74 Min (650MB)")
+        self.combo_cd_capacity.setItemData(1, "74 Min (650MB) / 4440 seconds max capacity", Qt.ItemDataRole.ToolTipRole)
+        
+        cap_layout = QHBoxLayout()
+        cap_layout.addWidget(QLabel("Target Capacity:"))
+        cap_layout.addWidget(self.combo_cd_capacity, 1)
+        grid_opts.addLayout(cap_layout, 0, 0)
+        
+        # 2. Disc Format Mode
+        self.combo_disc_format = QComboBox()
+        self.combo_disc_format.addItem("Audio CD (CD-DA + CD-Text)")
+        self.combo_disc_format.setItemData(0, "Audio CD (CD-DA + CD-Text for standalone CD players & car stereos)", Qt.ItemDataRole.ToolTipRole)
+        self.combo_disc_format.addItem("Data CD / ISO (ISO9660)")
+        self.combo_disc_format.setItemData(1, "Data CD / ISO (ISO9660 + Tagged WAV Files for Rhythmbox & PC players)", Qt.ItemDataRole.ToolTipRole)
+        self.combo_disc_format.setToolTip("Audio CD: for standard CD players/car stereos.\nData CD: for Rhythmbox, VLC & computer file readers.")
+        
+        fmt_layout = QHBoxLayout()
+        fmt_layout.addWidget(QLabel("Disc Format:"))
+        fmt_layout.addWidget(self.combo_disc_format, 1)
+        grid_opts.addLayout(fmt_layout, 0, 1)
+        
+        # 3. Burn Speed
+        self.combo_burn_speed = QComboBox()
+        self.combo_burn_speed.addItems(["Auto", "4x", "8x", "16x", "24x", "32x", "48x"])
+        spd_layout = QHBoxLayout()
+        spd_layout.addWidget(QLabel("Burn Speed:"))
+        spd_layout.addWidget(self.combo_burn_speed, 1)
+        grid_opts.addLayout(spd_layout, 1, 0)
+        
+        # 4. Normalize Audio
+        self.chk_burn_normalize = QCheckBox("Normalize Audio Volumes")
+        self.chk_burn_normalize.setChecked(True)
+        grid_opts.addWidget(self.chk_burn_normalize, 1, 1)
+        
+        # 5. Simulation Mode
+        self.chk_burn_simulate = QCheckBox("Simulation Mode (Test Burn)")
+        grid_opts.addWidget(self.chk_burn_simulate, 2, 0)
+        
+        # 6. Allow Overburn
+        self.chk_burn_overburn = QCheckBox("Allow Overburn (over capacity)")
+        grid_opts.addWidget(self.chk_burn_overburn, 2, 1)
+        
+        right_layout.addLayout(grid_opts)
+        
+        # Batch Mode Checkbox (below grid)
+        self.chk_burn_all_drives = QCheckBox("Burn playlist to all drives (Batch Mode)")
+        self.chk_burn_all_drives.setToolTip("When checked, clicking Burn CD burns to ALL connected drives in parallel. When unchecked, burning targets the active tab only.")
+        right_layout.addWidget(self.chk_burn_all_drives)
+        
+        # Drive Section Header with Rescan Button
+        drives_hdr = QHBoxLayout()
+        drives_hdr.addWidget(QLabel("<b>Target Burn Drive Tabs:</b>"))
+        drives_hdr.addStretch()
+        self.btn_rescan_drives = QPushButton("🔄 Rescan / Find Drives")
+        self.btn_rescan_drives.setToolTip("Scan system for USB or IDE/SATA optical drives")
+        self.btn_rescan_drives.clicked.connect(self.rescan_drives_clicked.emit)
+        drives_hdr.addWidget(self.btn_rescan_drives)
+        right_layout.addLayout(drives_hdr)
+        
+        # QTabWidget for Optical CD Drives
+        self.tab_drives = QTabWidget()
+        right_layout.addWidget(self.tab_drives)
+        
+        splits_layout.addWidget(right_frame, 2)
+        layout.addLayout(splits_layout)
+        
+        # Execution Console
+        layout.addWidget(QLabel("<b>Conversion & Burning Log Output</b>"))
+        self.burn_console = QPlainTextEdit()
+        self.burn_console.setReadOnly(True)
+        self.burn_console.setMaximumHeight(130)
+        self.burn_console.setPlaceholderText("Status messages and tool output will stream here...")
+        layout.addWidget(self.burn_console)
+        
+        # Control Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        
+        self.btn_convert_wav = QPushButton("⚡ Convert Playlist to WAV")
+        self.btn_convert_wav.setObjectName("primary_btn")
+        self.btn_convert_wav.clicked.connect(self.run_convert_wav_clicked.emit)
+        btn_layout.addWidget(self.btn_convert_wav)
+        
+        self.btn_burn_cd = QPushButton("💿 Burn CD")
+        self.btn_burn_cd.setObjectName("primary_btn")
+        self.btn_burn_cd.setEnabled(False)
+        self.btn_burn_cd.clicked.connect(self.run_burn_cd_clicked.emit)
+        btn_layout.addWidget(self.btn_burn_cd)
+        
+        self.btn_stop_burn = QPushButton("🛑 Stop")
+        self.btn_stop_burn.setObjectName("danger_btn")
+        self.btn_stop_burn.setEnabled(False)
+        self.btn_stop_burn.clicked.connect(self.stop_burn_clicked.emit)
+        btn_layout.addWidget(self.btn_stop_burn)
+        
+        layout.addLayout(btn_layout)
+        self.add_page_to_stack(page)
+
+    def update_drive_list(self, drives):
+        self.tab_drives.clear()
+        self.detected_drives = list(drives) if drives else []
+        self.drive_consoles = {}
+        self.drive_status_labels = {}
+        
+        if not drives:
+            no_drives_page = QWidget()
+            nd_layout = QVBoxLayout(no_drives_page)
+            lbl = QLabel("No optical drives detected.\nPlug in your USB CD drive and click '🔄 Rescan / Find Drives'.")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color: #64748b; font-style: italic; padding: 20px;")
+            nd_layout.addWidget(lbl)
+            self.tab_drives.addTab(no_drives_page, "No Drives Found")
+            return
+
+        for dev_path in drives:
+            dev_tag = os.path.basename(dev_path)
+            tab_page = QWidget()
+            tab_layout = QVBoxLayout(tab_page)
+            tab_layout.setContentsMargins(12, 12, 12, 12)
+            tab_layout.setSpacing(8)
+            
+            hdr_row = QHBoxLayout()
+            dev_info = QLabel(f"<b>Device:</b> <code>{dev_path}</code>")
+            hdr_row.addWidget(dev_info)
+            
+            status_lbl = QLabel("Status: Idle")
+            status_lbl.setStyleSheet("color: #10b981; font-weight: bold;")
+            self.drive_status_labels[dev_path] = status_lbl
+            hdr_row.addWidget(status_lbl)
+            hdr_row.addStretch()
+            
+            eject_btn = QPushButton("Pop Tray")
+            eject_btn.setFixedSize(80, 24)
+            eject_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #334155;
+                    border: 1px solid #475569;
+                    border-radius: 4px;
+                    color: #f1f5f9;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #475569;
+                }
+            """)
+            eject_btn.clicked.connect(lambda checked, path=dev_path: self.eject_drive_clicked.emit(path))
+            hdr_row.addWidget(eject_btn)
+            tab_layout.addLayout(hdr_row)
+            
+            # Individual Drive Burn Action Row
+            act_row = QHBoxLayout()
+            btn_burn_this = QPushButton(f"💿 Burn to {dev_tag}")
+            btn_burn_this.setStyleSheet("""
+                QPushButton {
+                    background-color: #0284c7;
+                    border-radius: 4px;
+                    padding: 4px 12px;
+                    color: white;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #0369a1;
+                }
+            """)
+            btn_burn_this.clicked.connect(lambda checked, path=dev_path: self.run_burn_drive_clicked.emit(path))
+            act_row.addWidget(btn_burn_this)
+            act_row.addStretch()
+            tab_layout.addLayout(act_row)
+            
+            # Drive-specific log console
+            drive_console = QPlainTextEdit()
+            drive_console.setReadOnly(True)
+            drive_console.setPlaceholderText(f"Burn logging for {dev_path} will stream here...")
+            drive_console.setMaximumHeight(160)
+            tab_layout.addWidget(drive_console)
+            self.drive_consoles[dev_path] = drive_console
+            
+            self.tab_drives.addTab(tab_page, f"📀 {dev_tag}")
+
+    def get_target_drives(self):
+        if not getattr(self, "detected_drives", []):
+            return []
+            
+        if self.chk_burn_all_drives.isChecked():
+            return list(self.detected_drives)
+        else:
+            idx = self.tab_drives.currentIndex()
+            if 0 <= idx < len(self.detected_drives):
+                return [self.detected_drives[idx]]
+            return [self.detected_drives[0]]
+
+    def get_checked_drives(self):
+        return self.get_target_drives()
 
     def move_playlist_song_up(self):
         row = self.table_playlist.currentRow()
@@ -857,13 +1256,24 @@ class MainWindow(QMainWindow):
         return path
 
     def get_settings_inputs(self):
+        level_map = {
+            "Minimal (5,000 cycles)": 5000,
+            "Light (15,000 cycles)": 15000,
+            "Standard (30,000 cycles)": 30000,
+            "Thorough (50,000 cycles)": 50000,
+            "Deep (100,000 cycles)": 100000
+        }
+        selected_level = self.combo_train_level.currentText()
+        train_level_val = level_map.get(selected_level, 30000)
+        
         return {
             "music_dir": self.txt_music_dir.text().strip(),
             "listenbrainz_json": self.txt_json_path.text().strip(),
             "playlist_save_path": self.txt_playlist_path.text().strip(),
             "theme": self.combo_theme.currentText(),
             "num_workers": self.combo_workers.currentText(),
-            "num_gpus": self.combo_gpus.currentText()
+            "num_gpus": self.combo_gpus.currentText(),
+            "train_level": train_level_val
         }
 
     def set_settings_inputs(self, config_dict):
@@ -880,6 +1290,16 @@ class MainWindow(QMainWindow):
             self.combo_gpus.setCurrentIndex(index)
         else:
             self.combo_gpus.setCurrentIndex(self.combo_gpus.count() - 1)
+            
+        val_map = {
+            5000: "Minimal (5,000 cycles)",
+            15000: "Light (15,000 cycles)",
+            30000: "Standard (30,000 cycles)",
+            50000: "Thorough (50,000 cycles)",
+            100000: "Deep (100,000 cycles)"
+        }
+        saved_level = config_dict.get("train_level", 30000)
+        self.combo_train_level.setCurrentText(val_map.get(saved_level, "Standard (30,000 cycles)"))
 
     def update_sidebar_status(self, fairseq_ok, index_ok, model_ok, index_count):
         # fairseq

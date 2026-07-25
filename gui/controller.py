@@ -21,6 +21,7 @@
 # gui/controller.py
 
 import os
+import shlex
 from PyQt6.QtCore import Qt, QObject
 from PyQt6.QtWidgets import QApplication, QTableWidgetItem, QMessageBox, QInputDialog
 from gui.styles import DARK_THEME, LIGHT_THEME
@@ -79,6 +80,15 @@ class OpenPlaylisterController(QObject):
             lambda text: self.filter_table(self.view.table_seed_songs, text)
         )
         
+        # Queue bindings
+        self.queued_playlist_tracks = []
+        self.view.btn_add_album.clicked.connect(self.on_add_album_to_queue)
+        self.view.btn_add_artist.clicked.connect(self.on_add_artist_to_queue)
+        self.view.btn_add_track.clicked.connect(self.on_add_track_to_queue)
+        self.view.btn_remove_queued.clicked.connect(self.on_remove_queued_track)
+        self.view.btn_clear_queue.clicked.connect(self.on_clear_queue)
+        self.view.btn_generate_queued.clicked.connect(self.on_generate_queued_playlist)
+
         # Seed song selection table click
         self.view.table_seed_songs.itemSelectionChanged.connect(self.on_seed_selected)
         self.view.btn_generate.clicked.connect(self.on_generate_playlist)
@@ -97,6 +107,21 @@ class OpenPlaylisterController(QObject):
         self.register_scanner_bindings()
         self.view.autotag_clicked.connect(self.on_start_autotag)
         self.view.stop_autotag_clicked.connect(self.on_stop_autotag)
+
+        # CD Burning signals
+        self.view.burn_browse_playlist_clicked.connect(self.on_burn_browse_playlist)
+        self.view.run_convert_wav_clicked.connect(self.on_run_convert_wav)
+        self.view.run_burn_cd_clicked.connect(self.on_run_burn_cd)
+        self.view.run_burn_drive_clicked.connect(self.on_run_burn_single_drive)
+        self.view.rescan_drives_clicked.connect(self.scan_drives)
+        self.view.stop_burn_clicked.connect(self.on_stop_burn)
+        self.view.eject_drive_clicked.connect(self.on_eject_drive)
+        self.view.combo_cd_capacity.currentTextChanged.connect(self.on_cd_capacity_changed)
+
+        self.playlist_tracks = []
+        self.converted_tracks = []
+        self.burn_workers = []
+        self.wav_worker = None
 
 
     # ----------------------------------------------------
@@ -173,6 +198,8 @@ class OpenPlaylisterController(QObject):
         if index == 0:
             self.update_statuses()
         elif index == 4:
+            self.scan_drives()
+        elif index == 5:
             self.on_load_playlist()
 
     def update_statuses(self):
@@ -203,7 +230,8 @@ class OpenPlaylisterController(QObject):
             self.view.table_seed_songs.insertRow(row_seed)
             self.view.table_seed_songs.setItem(row_seed, 0, QTableWidgetItem(song["title"]))
             self.view.table_seed_songs.setItem(row_seed, 1, QTableWidgetItem(song["artist"]))
-            self.view.table_seed_songs.setItem(row_seed, 2, QTableWidgetItem(song["mbid"]))
+            self.view.table_seed_songs.setItem(row_seed, 2, QTableWidgetItem(song.get("album", "Unknown Album")))
+            self.view.table_seed_songs.setItem(row_seed, 3, QTableWidgetItem(song["mbid"]))
 
     def filter_table(self, table_widget, search_text):
         search_text = search_text.lower()
@@ -334,7 +362,8 @@ class OpenPlaylisterController(QObject):
         self.view.table_seed_songs.insertRow(row_seed)
         self.view.table_seed_songs.setItem(row_seed, 0, QTableWidgetItem(song["title"]))
         self.view.table_seed_songs.setItem(row_seed, 1, QTableWidgetItem(song["artist"]))
-        self.view.table_seed_songs.setItem(row_seed, 2, QTableWidgetItem(song["mbid"]))
+        self.view.table_seed_songs.setItem(row_seed, 2, QTableWidgetItem(song.get("album", "Unknown Album")))
+        self.view.table_seed_songs.setItem(row_seed, 3, QTableWidgetItem(song["mbid"]))
 
     def on_scan_finished(self, final_index):
         self.model.save_gui_index()
@@ -402,7 +431,37 @@ class OpenPlaylisterController(QObject):
                 return
 
         self.view.console_logs.clear()
-        self.view.console_logs.appendPlainText(">>> Executing: preprocess.sh " + json_path)
+        
+        # Spotify format detection
+        is_spotify = False
+        target_path = json_path
+        try:
+            with open(json_path, "r") as f:
+                import json
+                data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    first_item = data[0]
+                    if "artistName" in first_item or "master_metadata_album_artist_name" in first_item:
+                        is_spotify = True
+        except Exception:
+            pass
+
+        if is_spotify:
+            self.view.console_logs.appendPlainText(">>> Detected Spotify Streaming History format. Resolving tracks to local MusicBrainz IDs...")
+            translated_path = os.path.abspath("spotify_translated.json")
+            import sys
+            import subprocess
+            try:
+                conv_cmd = [sys.executable, "spotify_to_listenbrainz.py", json_path, translated_path]
+                res = subprocess.run(conv_cmd, capture_output=True, text=True, check=True)
+                self.view.console_logs.appendPlainText(res.stdout)
+                target_path = translated_path
+            except Exception as e:
+                self.view.console_logs.appendPlainText(f">>> Spotify translation error: {str(e)}")
+                QMessageBox.critical(self.view, "Import Error", f"Failed to translate Spotify history: {str(e)}")
+                return
+
+        self.view.console_logs.appendPlainText(">>> Executing: preprocess.sh " + target_path)
         
         # Disable buttons while running
         self.set_training_buttons_enabled(False)
@@ -417,7 +476,7 @@ class OpenPlaylisterController(QObject):
         self.view.train_progress.setRange(0, 0)
         self.ui_timer.start(1000)
 
-        cmd = f"./preprocess.sh {json_path}"
+        cmd = f"./preprocess.sh {target_path}"
         self.cmd_worker = CommandWorker(cmd)
         self.cmd_worker.line_read.connect(self.on_cmd_line)
         self.cmd_worker.finished_command.connect(self.on_cmd_finished)
@@ -533,6 +592,8 @@ class OpenPlaylisterController(QObject):
         # Build command with parallel training arguments
         num_workers = self.model.get_config_value("num_workers") or "1"
         num_gpus = self.model.get_config_value("num_gpus") or "1"
+        train_level = int(self.model.get_config_value("train_level") or 30000)
+        self.current_train_level = train_level
         
         train_args = []
         if int(num_workers) > 1:
@@ -541,6 +602,8 @@ class OpenPlaylisterController(QObject):
             train_args.append(f"--distributed-world-size {num_gpus}")
             train_args.append(f"--nprocs-per-node {num_gpus}")
             
+        train_args.append(f"--max-update {train_level}")
+        
         train_args_str = " ".join(train_args)
         cmd = f"./train.sh {train_args_str}".strip()
         
@@ -555,9 +618,9 @@ class OpenPlaylisterController(QObject):
         self.train_start_update = None
         self.train_start_update_time = None
         self.view.train_progress_card.setVisible(True)
-        self.view.lbl_train_status.setText("Training AI model (Updates: 0 / 50000)...")
+        self.view.lbl_train_status.setText(f"Training AI model (Updates: 0 / {train_level})...")
         self.view.lbl_train_time.setText("Elapsed: 00:00 | Remaining: Estimating...")
-        self.view.train_progress.setRange(0, 50000)
+        self.view.train_progress.setRange(0, train_level)
         self.view.train_progress.setValue(0)
         self.ui_timer.start(1000)
 
@@ -576,7 +639,8 @@ class OpenPlaylisterController(QObject):
             if match:
                 current_update = int(match.group(1))
                 self.view.train_progress.setValue(current_update)
-                self.view.lbl_train_status.setText(f"Training AI model (Updates: {current_update} / 50000)...")
+                train_level = getattr(self, "current_train_level", 30000)
+                self.view.lbl_train_status.setText(f"Training AI model (Updates: {current_update} / {train_level})...")
                 
                 import time
                 if self.train_start_update is None:
@@ -587,7 +651,7 @@ class OpenPlaylisterController(QObject):
                     updates_since_start = current_update - self.train_start_update
                     if elapsed_since_start > 0 and updates_since_start > 0:
                         rate = updates_since_start / elapsed_since_start
-                        remaining = (50000 - current_update) / rate
+                        remaining = (train_level - current_update) / rate
                         self.view.lbl_train_time.setText(f"Elapsed: {self.format_time(time.time() - self.task_start_time)} | Remaining: {self.format_time(remaining)}")
 
     def on_cmd_finished(self, exit_code):
@@ -626,25 +690,211 @@ class OpenPlaylisterController(QObject):
             self.view.lbl_selected_seed.setText("No Seed Track Selected")
             self.view.btn_generate.setEnabled(False)
             self.selected_seed_mbid = None
+            self.selected_seed_artist = None
+            self.selected_seed_album = None
+            self.selected_seed_title = None
             return
             
         row = selected_ranges[0].topRow()
         title = self.view.table_seed_songs.item(row, 0).text()
         artist = self.view.table_seed_songs.item(row, 1).text()
-        mbid = self.view.table_seed_songs.item(row, 2).text()
+        album = self.view.table_seed_songs.item(row, 2).text()
+        mbid = self.view.table_seed_songs.item(row, 3).text()
         
         self.selected_seed_mbid = mbid
-        self.view.lbl_selected_seed.setText(f"Seed: <b>{title}</b> by <b>{artist}</b><br><small>MBID: {mbid}</small>")
+        self.selected_seed_artist = artist
+        self.selected_seed_album = album
+        self.selected_seed_title = title
+        
+        # Album completeness check
+        album_name_lower = album.strip().lower()
+        artist_name_lower = artist.strip().lower()
+        album_songs = [s for s in self.model.songs_list if s.get("album", "").strip().lower() == album_name_lower and s.get("artist", "").strip().lower() == artist_name_lower]
+        if not album_songs:
+            album_songs = [s for s in self.model.songs_list if s.get("album", "").strip().lower() == album_name_lower]
+            
+        alb_duration = sum(s.get("duration", 240.0) for s in album_songs)
+        alb_m = int(alb_duration // 60)
+        alb_s = int(alb_duration % 60)
+        self.view.lbl_album_info.setText(
+            f"Album Availability: <b>'{album}'</b> by <b>{artist}</b> — <b>{len(album_songs)}</b> tracks in library ({alb_m}m {alb_s:02d}s)"
+        )
+        
+        gen_mode = self.view.combo_gen_mode.currentText()
+        if gen_mode == "Single Artist":
+            self.view.lbl_selected_seed.setText(f"Target Artist: <b>{artist}</b><br><small>Seed Track: '{title}' ({album})</small>")
+        elif gen_mode == "Recreate Album":
+            self.view.lbl_selected_seed.setText(f"Target Album: <b>{album}</b> by <b>{artist}</b><br><small>Seed Track: '{title}'</small>")
+        else:
+            self.view.lbl_selected_seed.setText(f"Seed: <b>{title}</b> by <b>{artist}</b><br><small>Album: {album} | MBID: {mbid}</small>")
         self.view.btn_generate.setEnabled(True)
 
-    def on_generate_playlist(self):
+    # ----------------------------------------------------
+    # Multi-Item Playlist Builder Queue
+    # ----------------------------------------------------
+    def on_add_album_to_queue(self):
+        if not getattr(self, "selected_seed_album", None):
+            QMessageBox.warning(self.view, "Selection Error", "Please select a song in the seed table to specify an album.")
+            return
+            
+        album_name = self.selected_seed_album.strip().lower()
+        artist_name = (self.selected_seed_artist or "").strip().lower()
+        
+        album_songs = [s for s in self.model.songs_list if s.get("album", "").strip().lower() == album_name and s.get("artist", "").strip().lower() == artist_name]
+        if not album_songs:
+            album_songs = [s for s in self.model.songs_list if s.get("album", "").strip().lower() == album_name]
+            
+        import re
+        def natural_sort_key(song):
+            filename = os.path.basename(song["path"])
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', filename)]
+        album_songs.sort(key=natural_sort_key)
+        
+        added_count = 0
+        existing_paths = {s["path"] for s in self.queued_playlist_tracks}
+        for song in album_songs:
+            if song["path"] not in existing_paths:
+                self.queued_playlist_tracks.append(song)
+                existing_paths.add(song["path"])
+                added_count += 1
+                
+        self.update_queue_ui()
+        self.view.lbl_generation_status.setText(f"Added {added_count} tracks from album '{self.selected_seed_album}' to queue.")
+
+    def on_add_artist_to_queue(self):
+        if not getattr(self, "selected_seed_artist", None):
+            QMessageBox.warning(self.view, "Selection Error", "Please select a song in the seed table to specify an artist.")
+            return
+            
+        artist_name = self.selected_seed_artist.strip().lower()
+        artist_songs = [s for s in self.model.songs_list if s.get("artist", "").strip().lower() == artist_name]
+        if not artist_songs:
+            artist_songs = [s for s in self.model.songs_list if artist_name in s.get("artist", "").strip().lower()]
+            
+        artist_songs.sort(key=lambda s: (s.get("album", "").lower(), os.path.basename(s["path"]).lower()))
+        
+        added_count = 0
+        existing_paths = {s["path"] for s in self.queued_playlist_tracks}
+        for song in artist_songs:
+            if song["path"] not in existing_paths:
+                self.queued_playlist_tracks.append(song)
+                existing_paths.add(song["path"])
+                added_count += 1
+                
+        self.update_queue_ui()
+        self.view.lbl_generation_status.setText(f"Added {added_count} tracks by artist '{self.selected_seed_artist}' to queue.")
+
+    def on_add_track_to_queue(self):
+        if not getattr(self, "selected_seed_mbid", None):
+            QMessageBox.warning(self.view, "Selection Error", "Please select a song in the seed table to add to queue.")
+            return
+            
+        target_song = None
+        for s in self.model.songs_list:
+            if s["mbid"] == self.selected_seed_mbid:
+                target_song = s
+                break
+                
+        if not target_song:
+            return
+            
+        existing_paths = {s["path"] for s in self.queued_playlist_tracks}
+        if target_song["path"] not in existing_paths:
+            self.queued_playlist_tracks.append(target_song)
+            self.update_queue_ui()
+            self.view.lbl_generation_status.setText(f"Added track '{target_song['title']}' to queue.")
+        else:
+            QMessageBox.information(self.view, "Already Queued", f"Track '{target_song['title']}' is already in the playlist queue.")
+
+    def on_remove_queued_track(self):
+        selected_ranges = self.view.table_playlist_queue.selectedRanges()
+        if not selected_ranges:
+            return
+        row = selected_ranges[0].topRow()
+        if 0 <= row < len(self.queued_playlist_tracks):
+            removed = self.queued_playlist_tracks.pop(row)
+            self.update_queue_ui()
+            self.view.lbl_generation_status.setText(f"Removed '{removed['title']}' from queue.")
+
+    def on_clear_queue(self):
+        self.queued_playlist_tracks = []
+        self.update_queue_ui()
+        self.view.lbl_generation_status.setText("Playlist queue cleared.")
+
+    def update_queue_ui(self):
+        self.view.table_playlist_queue.setRowCount(0)
+        total_duration = 0.0
+        
+        for idx, song in enumerate(self.queued_playlist_tracks, start=1):
+            row = self.view.table_playlist_queue.rowCount()
+            self.view.table_playlist_queue.insertRow(row)
+            
+            dur_val = song.get("duration", 240.0)
+            total_duration += dur_val
+            m = int(dur_val // 60)
+            s = int(dur_val % 60)
+            
+            self.view.table_playlist_queue.setItem(row, 0, QTableWidgetItem(str(idx)))
+            self.view.table_playlist_queue.setItem(row, 1, QTableWidgetItem(song["title"]))
+            self.view.table_playlist_queue.setItem(row, 2, QTableWidgetItem(song["artist"]))
+            self.view.table_playlist_queue.setItem(row, 3, QTableWidgetItem(song.get("album", "Unknown Album")))
+            self.view.table_playlist_queue.setItem(row, 4, QTableWidgetItem(f"{m}:{s:02d}"))
+            
+        # Update progress bar and capacity label
+        self.view.progress_disc_capacity.setValue(min(4800, int(total_duration)))
+        
+        tot_m = int(total_duration // 60)
+        tot_s = int(total_duration % 60)
+        pct = int((total_duration / 4800.0) * 100)
+        rem_sec = 4800.0 - total_duration
+        
+        if rem_sec >= 0:
+            rem_m = int(rem_sec // 60)
+            rem_s = int(rem_sec % 60)
+            self.view.lbl_disc_capacity.setText(
+                f"CD Capacity: {tot_m}m {tot_s:02d}s / 80:00 ({pct}% full) — <b>{rem_m}m {rem_s:02d}s remaining</b>"
+            )
+            self.view.lbl_disc_capacity.setStyleSheet("font-size: 12px; font-weight: bold; color: #818cf8;")
+        else:
+            over_sec = abs(rem_sec)
+            over_m = int(over_sec // 60)
+            over_s = int(over_sec % 60)
+            self.view.lbl_disc_capacity.setText(
+                f"CD Capacity: {tot_m}m {tot_s:02d}s / 80:00 ({pct}% full) — ⚠️ <b>EXCEEDS DISC LIMIT BY {over_m}m {over_s:02d}s</b>"
+            )
+            self.view.lbl_disc_capacity.setStyleSheet("font-size: 12px; font-weight: bold; color: #ef4444;")
+
+    def on_generate_queued_playlist(self):
+        if not self.queued_playlist_tracks:
+            QMessageBox.warning(self.view, "Queue Empty", "The playlist queue is empty. Add tracks or albums first.")
+            return
+            
         save_path = self.model.get_config_value("playlist_save_path")
         if not save_path:
             QMessageBox.warning(self.view, "Path Error", "Please configure a valid Playlist Save Path under Settings.")
             return
+            
+        temp_queue_file = "checkpoints/queued_tracks.txt"
+        os.makedirs("checkpoints", exist_ok=True)
+        with open(temp_queue_file, "w") as f:
+            for s in self.queued_playlist_tracks:
+                f.write(s["path"] + "\n")
+                
+        self.view.gen_console.clear()
+        self.view.gen_console.appendPlainText(f">>> Processing queued multi-item playlist ({len(self.queued_playlist_tracks)} tracks)...")
+        self.view.lbl_generation_status.setText("Exporting custom queued playlist...")
+        
+        cmd = f"python3 write_playlist.py {shlex.quote(save_path)} --mode custom --tracks-file {shlex.quote(temp_queue_file)}"
+        self.gen_worker = CommandWorker(cmd)
+        self.gen_worker.line_read.connect(self.on_gen_log)
+        self.gen_worker.finished_command.connect(self.on_gen_finished)
+        self.gen_worker.start()
 
+    def on_generate_playlist(self):
         mode_map = {
             "Standard AI Playlist": "standard",
+            "Single Artist": "artist",
+            "Recreate Album": "album",
             "CD Safe (80 Minutes)": "cd",
             "Cassette C60 (30 Mins / Side)": "c60",
             "Cassette C90 (45 Mins / Side)": "c90",
@@ -655,26 +905,77 @@ class OpenPlaylisterController(QObject):
         count = self.view.spin_playlist_count.value()
 
         self.view.gen_console.clear()
-        self.view.btn_generate.setEnabled(False)
 
-        if mode_str in ("full", "half"):
-            self.view.gen_console.appendPlainText(f">>> Processing {mode_str} library playlist...")
-            self.view.lbl_generation_status.setText("Compiling library tracks...")
-            cmd = f"python3 write_playlist.py {save_path} --mode {mode_str}"
-        else:
-            if not getattr(self, "selected_seed_mbid", None):
-                QMessageBox.warning(self.view, "Seed Error", "Please select a seed track for AI generation first.")
-                self.view.btn_generate.setEnabled(True)
+        if mode_str == "artist":
+            if not getattr(self, "selected_seed_artist", None):
+                QMessageBox.warning(self.view, "Seed Error", "Please select a seed track to specify target Artist.")
                 return
-            self.view.gen_console.appendPlainText(f">>> Seed mbid: {self.selected_seed_mbid}")
-            self.view.gen_console.appendPlainText(">>> Executing sequence inference pipeline...")
-            self.view.lbl_generation_status.setText("Generating playlist customized by AI recommendations...")
-            
-            gen_args = []
-            if self.view.chk_randomize.isChecked():
-                gen_args.append("--sampling-topp 0.9 --temperature 1.2")
-            gen_args_str = " ".join(gen_args)
-            cmd = f'bash -c "echo {self.selected_seed_mbid} | ./generate.sh {gen_args_str} | python3 write_playlist.py {save_path} --mode {mode_str} --count {count}"'
+            self.on_add_artist_to_queue()
+            self.view.lbl_generation_status.setText(
+                f"Populated tracks for artist '{self.selected_seed_artist}' into playlist table below. Click 'Save Playlist' at the bottom to export."
+            )
+            return
+
+        elif mode_str == "album":
+            if not getattr(self, "selected_seed_album", None):
+                QMessageBox.warning(self.view, "Seed Error", "Please select a seed track to specify target Album.")
+                return
+            self.on_add_album_to_queue()
+            self.view.lbl_generation_status.setText(
+                f"Populated tracks for album '{self.selected_seed_album}' into playlist table below. Click 'Save Playlist' at the bottom to export."
+            )
+            return
+
+        elif mode_str in ("full", "half"):
+            import random
+            pool = list(self.model.songs_list)
+            random.seed(42)
+            random.shuffle(pool)
+            if mode_str == "half":
+                pool = pool[:max(1, len(pool) // 2)]
+            self.queued_playlist_tracks = pool
+            self.update_queue_ui()
+            self.view.lbl_generation_status.setText(
+                f"Populated {len(pool)} tracks ({mode_str} library) into playlist table below. Click 'Save Playlist' at the bottom to export."
+            )
+            return
+
+        # AI generation modes
+        if not getattr(self, "selected_seed_mbid", None):
+            QMessageBox.warning(self.view, "Seed Error", "Please select a seed track for AI generation first.")
+            return
+
+        save_path = self.model.get_config_value("playlist_save_path") or "playlist.m3u"
+        self.view.btn_generate.setEnabled(False)
+        self.view.gen_console.appendPlainText(f">>> Seed mbid: {self.selected_seed_mbid}")
+        self.view.gen_console.appendPlainText(">>> Verifying system prerequisites and model vocabulary shape compatibility...")
+        self.view.lbl_generation_status.setText("Checking AI prerequisites...")
+
+        from gui.workers import PrereqRunnerWorker
+        music_dir = self.model.get_config_value("music_directory") or "standard"
+        self.prereq_worker = PrereqRunnerWorker(music_dir=music_dir)
+        self.prereq_worker.log_signal.connect(self.on_gen_log)
+        self.prereq_worker.status_signal.connect(self.view.lbl_generation_status.setText)
+        self.prereq_worker.finished_prereqs.connect(
+            lambda success, msg: self.on_prereqs_finished(success, msg, save_path, mode_str, count)
+        )
+        self.prereq_worker.start()
+
+    def on_prereqs_finished(self, success, msg, save_path, mode_str, count):
+        if not success:
+            self.view.lbl_generation_status.setText(f"Prerequisite check failed: {msg}")
+            self.view.gen_console.appendPlainText(f">>> Prerequisite Check Error: {msg}")
+            self.view.btn_generate.setEnabled(True)
+            return
+
+        self.view.gen_console.appendPlainText(">>> Executing sequence inference pipeline...")
+        self.view.lbl_generation_status.setText("Generating playlist customized by AI recommendations...")
+
+        gen_args = []
+        if self.view.chk_randomize.isChecked():
+            gen_args.append("--sampling-topp 0.9 --temperature 1.2")
+        gen_args_str = " ".join(gen_args)
+        cmd = f'bash -c "echo {shlex.quote(self.selected_seed_mbid)} | ./generate.sh {gen_args_str} | python3 write_playlist.py {shlex.quote(save_path)} --mode {mode_str} --count {count}"'
 
         self.gen_worker = CommandWorker(cmd)
         self.gen_worker.line_read.connect(self.on_gen_log)
@@ -684,33 +985,49 @@ class OpenPlaylisterController(QObject):
     def on_gen_log(self, line):
         self.view.gen_console.appendPlainText(line)
 
+    def load_generated_playlist_to_queue(self, save_path):
+        import glob
+        paths_to_load = []
+        if os.path.exists(save_path) and os.path.isfile(save_path):
+            with open(save_path, "r") as f:
+                paths_to_load = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        else:
+            parent_dir = os.path.dirname(os.path.abspath(save_path))
+            std_dir = os.path.join(parent_dir, "standard")
+            if os.path.exists(std_dir):
+                m3us = sorted(glob.glob(os.path.join(std_dir, "*.m3u")), key=os.path.getmtime, reverse=True)
+                if m3us:
+                    with open(m3us[0], "r") as f:
+                        paths_to_load = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                        
+        if paths_to_load:
+            path_map = {s["path"]: s for s in self.model.songs_list}
+            loaded_songs = []
+            for p in paths_to_load:
+                if p in path_map:
+                    loaded_songs.append(path_map[p])
+                else:
+                    from gui.metadata_helper import extract_metadata_from_path
+                    art, alb, tit = extract_metadata_from_path(p, "")
+                    loaded_songs.append({
+                        "mbid": "",
+                        "path": p,
+                        "artist": art or "Unknown Artist",
+                        "album": alb or "Unknown Album",
+                        "title": tit or os.path.basename(p),
+                        "duration": 240.0
+                    })
+            self.queued_playlist_tracks = loaded_songs
+            self.update_queue_ui()
+
     def on_gen_finished(self, exit_code):
         self.view.btn_generate.setEnabled(True)
         if exit_code == 0:
             save_path = self.model.get_config_value("playlist_save_path")
-            parent_dir = os.path.dirname(os.path.abspath(save_path))
-            
-            mode_map = {
-                "Standard AI Playlist": "standard",
-                "CD Safe (80 Minutes)": "cd",
-                "Cassette C60 (30 Mins / Side)": "c60",
-                "Cassette C90 (45 Mins / Side)": "c90",
-                "Full Library": "full",
-                "Half Library": "half"
-            }
-            mode_str = mode_map.get(self.view.combo_gen_mode.currentText(), "standard")
-            
-            if mode_str == "cd":
-                target_folder = os.path.join(parent_dir, "CDs")
-                self.view.lbl_generation_status.setText(f"CD-Safe Playlists successfully generated in:<br><b>{target_folder}</b>")
-            elif mode_str in ("c60", "c90"):
-                target_folder = os.path.join(parent_dir, "cassettes")
-                self.view.lbl_generation_status.setText(f"Cassette-Safe Playlists successfully generated in:<br><b>{target_folder}</b>")
-            else:
-                target_folder = os.path.join(parent_dir, "standard")
-                self.view.lbl_generation_status.setText(f"Playlist successfully generated at:<br><b>{save_path}</b><br>and copy saved in:<br><b>{target_folder}</b>")
-            
-            # Automatically refresh the playlist if they are on the edit page
+            self.load_generated_playlist_to_queue(save_path)
+            self.view.lbl_generation_status.setText(
+                f"AI Recommendations generated! Tracks populated into table below. Review and click 'Save Playlist' at the bottom when ready."
+            )
             if self.view.content_stack.currentIndex() == 4:
                 self.on_load_playlist()
         else:
@@ -723,8 +1040,33 @@ class OpenPlaylisterController(QObject):
         if text in ("Full Library", "Half Library"):
             self.view.btn_generate.setEnabled(True)
             self.view.lbl_generation_status.setText("Library mode selected. Ready to generate.")
+        elif text == "Single Artist":
+            if getattr(self, "selected_seed_artist", None):
+                title = getattr(self, "selected_seed_title", "")
+                album = getattr(self, "selected_seed_album", "")
+                self.view.lbl_selected_seed.setText(f"Target Artist: <b>{self.selected_seed_artist}</b><br><small>Seed Track: '{title}' ({album})</small>")
+                self.view.btn_generate.setEnabled(True)
+                self.view.lbl_generation_status.setText("Artist mode selected. Ready to generate.")
+            else:
+                self.view.btn_generate.setEnabled(False)
+                self.view.lbl_generation_status.setText("Select a song to set target Artist.")
+        elif text == "Recreate Album":
+            if getattr(self, "selected_seed_album", None):
+                title = getattr(self, "selected_seed_title", "")
+                artist = getattr(self, "selected_seed_artist", "")
+                self.view.lbl_selected_seed.setText(f"Target Album: <b>{self.selected_seed_album}</b> by <b>{artist}</b><br><small>Seed Track: '{title}'</small>")
+                self.view.btn_generate.setEnabled(True)
+                self.view.lbl_generation_status.setText("Album mode selected. Ready to generate.")
+            else:
+                self.view.btn_generate.setEnabled(False)
+                self.view.lbl_generation_status.setText("Select a song to set target Album.")
         else:
             if getattr(self, "selected_seed_mbid", None):
+                title = getattr(self, "selected_seed_title", "")
+                artist = getattr(self, "selected_seed_artist", "")
+                album = getattr(self, "selected_seed_album", "")
+                mbid = getattr(self, "selected_seed_mbid", "")
+                self.view.lbl_selected_seed.setText(f"Seed: <b>{title}</b> by <b>{artist}</b><br><small>Album: {album} | MBID: {mbid}</small>")
                 self.view.btn_generate.setEnabled(True)
                 self.view.lbl_generation_status.setText("Seed track selected. Ready to generate.")
             else:
@@ -947,4 +1289,347 @@ class OpenPlaylisterController(QObject):
             QMessageBox.information(self.view, "Success", f"Playlist changes saved successfully to:\n{path}")
         except Exception as e:
             QMessageBox.critical(self.view, "Save Error", f"Failed to write changes: {str(e)}")
+
+    # ----------------------------------------------------
+    # CD Burning & WAV Conversion
+    # ----------------------------------------------------
+    def scan_drives(self):
+        import glob
+        drives = glob.glob("/dev/sr*")
+        if not drives and os.path.exists("/dev/sr0"):
+            drives = ["/dev/sr0"]
+        self.view.update_drive_list(drives)
+
+    def on_eject_drive(self, dev_path):
+        import subprocess
+        if not dev_path.startswith("/dev/sr"):
+            return
+        try:
+            self.view.burn_console.appendPlainText(f">>> Ejecting tray for device: {dev_path}")
+            subprocess.run(["eject", dev_path], check=True)
+        except Exception as e:
+            self.view.burn_console.appendPlainText(f">>> Eject failed: {str(e)}")
+
+    def on_burn_browse_playlist(self):
+        default_path = self.model.get_config_value("playlist_save_path")
+        path = self.view.select_file("Select Playlist to Burn", "M3U Playlists (*.m3u)", default_path)
+        if not path:
+            return
+            
+        self.view.txt_burn_playlist_path.setText(path)
+        self.load_burn_playlist(path)
+
+    def load_burn_playlist(self, path):
+        tracks = []
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            tracks.append(line)
+            except Exception as e:
+                QMessageBox.warning(self.view, "Load Error", f"Failed to read playlist file: {str(e)}")
+                return
+                
+        song_map = {song["path"]: song for song in self.model.songs_list}
+        
+        self.playlist_tracks = []
+        self.converted_tracks = []
+        self.view.table_burn_tracks.setRowCount(0)
+        
+        total_duration = 0.0
+        
+        for idx, track_path in enumerate(tracks, 1):
+            song = song_map.get(track_path)
+            if song:
+                title = song["title"]
+                artist = song["artist"]
+                duration_sec = song.get("duration", 240)
+            else:
+                title = os.path.basename(track_path)
+                artist = "Unknown Artist"
+                duration_sec = 240
+                if os.path.exists(track_path):
+                    try:
+                        from mutagen import File
+                        audio = File(track_path)
+                        if audio and audio.info:
+                            duration_sec = int(audio.info.length)
+                    except Exception:
+                        pass
+                        
+            total_duration += duration_sec
+            
+            row = self.view.table_burn_tracks.rowCount()
+            self.view.table_burn_tracks.insertRow(row)
+            self.view.table_burn_tracks.setItem(row, 0, QTableWidgetItem(str(idx)))
+            self.view.table_burn_tracks.setItem(row, 1, QTableWidgetItem(title))
+            self.view.table_burn_tracks.setItem(row, 2, QTableWidgetItem(artist))
+            self.view.table_burn_tracks.setItem(row, 3, QTableWidgetItem(self.format_time(duration_sec)))
+            self.view.table_burn_tracks.setItem(row, 4, QTableWidgetItem("Original"))
+            
+            self.playlist_tracks.append((idx, title, artist, track_path, duration_sec))
+            
+        self.update_burn_capacity_verification(total_duration)
+
+    def on_cd_capacity_changed(self):
+        total_duration = sum(t[4] for t in getattr(self, "playlist_tracks", []))
+        self.update_burn_capacity_verification(total_duration)
+
+    def update_burn_capacity_verification(self, total_duration):
+        selected_text = self.view.combo_cd_capacity.currentText()
+        if "74 Min" in selected_text:
+            max_secs = 4440
+            max_label = "74 Min (650MB)"
+        else:
+            max_secs = 4800
+            max_label = "80 Min (700MB)"
+            
+        self.view.burn_capacity_progress.setRange(0, max_secs)
+        self.view.burn_capacity_progress.setValue(min(int(total_duration), max_secs))
+        
+        minutes = int(total_duration) // 60
+        seconds = int(total_duration) % 60
+        
+        summary_txt = (
+            f"Total Tracks: {len(getattr(self, 'playlist_tracks', []))}\n"
+            f"Total Duration: {minutes} mins {seconds} secs ({int(total_duration)}s)\n"
+            f"CD Capacity Limit: {max_label}"
+        )
+        self.view.lbl_burn_summary.setText(summary_txt)
+        
+        if total_duration <= max_secs:
+            self.view.lbl_burn_status.setText("Fits on CD")
+            self.view.lbl_burn_status.setStyleSheet("font-weight: bold; color: #10b981; font-size: 14px;")
+            self.view.burn_capacity_progress.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #334155;
+                    background-color: #0f172a;
+                    border-radius: 4px;
+                    text-align: center;
+                    color: #f8fafc;
+                }
+                QProgressBar::chunk {
+                    background-color: #10b981;
+                    border-radius: 3px;
+                }
+            """)
+            self.view.btn_convert_wav.setEnabled(len(self.playlist_tracks) > 0)
+        else:
+            diff = int(total_duration) - max_secs
+            self.view.lbl_burn_status.setText(f"Exceeds Capacity by {diff}s")
+            self.view.lbl_burn_status.setStyleSheet("font-weight: bold; color: #ef4444; font-size: 14px;")
+            self.view.burn_capacity_progress.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #334155;
+                    background-color: #0f172a;
+                    border-radius: 4px;
+                    text-align: center;
+                    color: #f8fafc;
+                }
+                QProgressBar::chunk {
+                    background-color: #ef4444;
+                    border-radius: 3px;
+                }
+            """)
+            self.view.btn_convert_wav.setEnabled(False)
+            self.view.btn_burn_cd.setEnabled(False)
+
+    def on_run_convert_wav(self):
+        if not getattr(self, "playlist_tracks", []):
+            QMessageBox.warning(self.view, "Convert Error", "Please select a playlist with tracks first.")
+            return
+            
+        self.view.burn_console.clear()
+        self.view.burn_console.appendPlainText(">>> Starting WAV conversion for CD-DA audio CD format...")
+        
+        # Safely reset previous worker reference to let garbage collector clean it up
+        self.wav_worker = None
+        
+        output_dir = os.path.abspath("temp_wav")
+        import shutil
+        if os.path.exists(output_dir):
+            try:
+                shutil.rmtree(output_dir)
+            except Exception:
+                pass
+        os.makedirs(output_dir, exist_ok=True)
+        
+        worker_tracks = [(t[0], t[1], t[2], t[3]) for t in self.playlist_tracks]
+        
+        self.view.btn_convert_wav.setEnabled(False)
+        self.view.btn_burn_cd.setEnabled(False)
+        self.view.btn_stop_burn.setEnabled(True)
+        
+        from gui.workers import WAVConverterWorker
+        normalize = self.view.chk_burn_normalize.isChecked()
+        num_workers = int(self.model.get_config_value("num_workers") or "1")
+        self.wav_worker = WAVConverterWorker(worker_tracks, output_dir, normalize=normalize, num_workers=num_workers)
+        self.wav_worker.progress.connect(self.on_wav_progress)
+        self.wav_worker.line_read.connect(self.on_wav_line_read)
+        self.wav_worker.finished_conversion.connect(self.on_wav_conversion_finished)
+        self.wav_worker.start()
+
+    def on_wav_progress(self, current, total, msg):
+        self.view.lbl_burn_status.setText(f"Converting ({current}/{total}): {msg}")
+
+    def on_wav_line_read(self, line):
+        self.view.burn_console.appendPlainText(line)
+
+    def on_wav_conversion_finished(self, results):
+        self.view.btn_stop_burn.setEnabled(False)
+        self.view.btn_convert_wav.setEnabled(True)
+        
+        self.converted_tracks = results
+        
+        failed_any = False
+        total_duration = 0.0
+        
+        for idx, res in enumerate(results):
+            row = idx
+            status = res["status"]
+            self.view.table_burn_tracks.setItem(row, 4, QTableWidgetItem(status))
+            
+            if status == "Converted":
+                total_duration += res["duration"]
+                size_mb = res["size"] / (1024 * 1024)
+                self.view.table_burn_tracks.setItem(row, 3, QTableWidgetItem(f"{self.format_time(res['duration'])} ({size_mb:.1f} MB)"))
+            else:
+                failed_any = True
+                self.view.table_burn_tracks.setItem(row, 3, QTableWidgetItem("--:--"))
+                
+        self.update_burn_capacity_verification(total_duration)
+        
+        if failed_any:
+            QMessageBox.warning(self.view, "Conversion Complete", "Some tracks failed to convert to CD-DA format. Please check the logs.")
+            self.view.btn_burn_cd.setEnabled(False)
+        else:
+            self.view.burn_console.appendPlainText(f"\n>>> All tracks successfully converted to CD-DA! Total actual WAV duration: {self.format_time(total_duration)}.")
+            selected_text = self.view.combo_cd_capacity.currentText()
+            max_secs = 4440 if "74 Min" in selected_text else 4800
+            if total_duration <= max_secs:
+                self.view.btn_burn_cd.setEnabled(True)
+
+    def on_run_burn_single_drive(self, dev_path):
+        self.on_run_burn_cd(override_drives=[dev_path])
+
+    def on_run_burn_cd(self, override_drives=None):
+        checked_drives = override_drives if override_drives is not None else self.view.get_target_drives()
+        if not checked_drives:
+            QMessageBox.warning(self.view, "Burn Error", "No target burn drive selected.")
+            return
+            
+        if not getattr(self, "converted_tracks", []):
+            QMessageBox.warning(self.view, "Burn Error", "Please convert your playlist to WAV files first.")
+            return
+            
+        burn_playlist_path = os.path.abspath("burn_playlist.m3u")
+        try:
+            with open(burn_playlist_path, "w") as f:
+                for res in self.converted_tracks:
+                    if res["wav_path"]:
+                        f.write(res["wav_path"] + "\n")
+        except Exception as e:
+            QMessageBox.critical(self.view, "Burn Error", f"Failed to generate burn playlist file: {str(e)}")
+            return
+            
+        self.view.burn_console.clear()
+        self.view.burn_console.appendPlainText(f">>> Spawning CD burn workers for drive(s): {', '.join(checked_drives)}")
+
+        # Update per-drive status badges
+        if hasattr(self.view, "drive_status_labels"):
+            for dev_path in checked_drives:
+                if dev_path in self.view.drive_status_labels:
+                    self.view.drive_status_labels[dev_path].setText("Status: Burning...")
+                    self.view.drive_status_labels[dev_path].setStyleSheet("color: #3b82f6; font-weight: bold;")
+        
+        self.view.btn_convert_wav.setEnabled(False)
+        self.view.btn_burn_cd.setEnabled(False)
+        self.view.btn_stop_burn.setEnabled(True)
+        
+        # Safely reset previous workers list to let garbage collector clean them up
+        self.burn_workers = []
+        self.active_burn_count = len(checked_drives)
+        
+        from gui.workers import CDBurnWorker
+        simulate = self.view.chk_burn_simulate.isChecked()
+        normalize = self.view.chk_burn_normalize.isChecked()
+        overburn = self.view.chk_burn_overburn.isChecked()
+        disc_format_text = self.view.combo_disc_format.currentText()
+        burn_type = "data" if "Data CD" in disc_format_text else "audio"
+        
+        for idx, dev_path in enumerate(checked_drives):
+            dev_tag = os.path.basename(dev_path)
+            device_temp_dir = os.path.abspath(f"temp_burn_{dev_tag}")
+            
+            import shutil
+            if os.path.exists(device_temp_dir):
+                try:
+                    shutil.rmtree(device_temp_dir)
+                except Exception:
+                    pass
+            os.makedirs(device_temp_dir, exist_ok=True)
+            
+            speed = self.view.combo_burn_speed.currentText()
+            worker = CDBurnWorker(
+                device=dev_path,
+                playlist_path=burn_playlist_path,
+                temp_dir=device_temp_dir,
+                simulate=simulate,
+                normalize=normalize,
+                speed=speed,
+                overburn=overburn,
+                burn_type=burn_type
+            )
+            worker.line_read.connect(self.on_burn_line_read)
+            worker.finished_burn.connect(self.on_burn_finished)
+            self.burn_workers.append(worker)
+            worker.start()
+
+    def on_burn_line_read(self, line, tag):
+        self.view.burn_console.appendPlainText(line)
+        if hasattr(self.view, "drive_consoles"):
+            for dev_path, console in self.view.drive_consoles.items():
+                if tag in dev_path or os.path.basename(dev_path) == tag:
+                    console.appendPlainText(line)
+
+    def on_burn_finished(self, device, exit_code):
+        self.active_burn_count -= 1
+        dev_tag = os.path.basename(device)
+        self.view.burn_console.appendPlainText(f"\n>>> [{dev_tag}] Burning process finished with exit code: {exit_code}")
+        
+        if hasattr(self.view, "drive_consoles") and device in self.view.drive_consoles:
+            self.view.drive_consoles[device].appendPlainText(f"\n>>> Burning finished with exit code: {exit_code}")
+            
+        if hasattr(self.view, "drive_status_labels") and device in self.view.drive_status_labels:
+            if exit_code == 0:
+                self.view.drive_status_labels[device].setText("Status: Completed")
+                self.view.drive_status_labels[device].setStyleSheet("color: #10b981; font-weight: bold;")
+            else:
+                self.view.drive_status_labels[device].setText(f"Status: Failed ({exit_code})")
+                self.view.drive_status_labels[device].setStyleSheet("color: #ef4444; font-weight: bold;")
+
+        if self.active_burn_count <= 0:
+            self.view.burn_console.appendPlainText("\n>>> All burning workers completed!")
+            self.view.btn_convert_wav.setEnabled(True)
+            self.view.btn_burn_cd.setEnabled(True)
+            self.view.btn_stop_burn.setEnabled(False)
+            
+            burn_playlist_path = os.path.abspath("burn_playlist.m3u")
+            if os.path.exists(burn_playlist_path):
+                try:
+                    os.remove(burn_playlist_path)
+                except Exception:
+                    pass
+
+    def on_stop_burn(self):
+        if getattr(self, "wav_worker", None):
+            self.wav_worker.stop()
+            self.view.burn_console.appendPlainText("\n>>> WAV conversion stop requested...")
+            
+        if getattr(self, "burn_workers", []):
+            for worker in self.burn_workers:
+                worker.stop()
+            self.view.burn_console.appendPlainText("\n>>> CD burning cancellation requested...")
 

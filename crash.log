@@ -1,20 +1,10 @@
 ==================================================
            OPENPLAYLISTER CRASH LOG               
 ==================================================
-Exit Code: 1
+Exit Code: -6
 --------------------------------------------------
 Traceback / Error Output:
-Traceback (most recent call last):
-  File "/home/jamie/Documents/Github/openplaylister/main_gui.py", line 111, in <module>
-    main()
-  File "/home/jamie/Documents/Github/openplaylister/main_gui.py", line 104, in main
-    view = MainWindow()
-  File "/home/jamie/Documents/Github/openplaylister/gui/view.py", line 60, in __init__
-    self.init_ui()
-  File "/home/jamie/Documents/Github/openplaylister/gui/view.py", line 184, in init_ui
-    self.create_generator_page()
-  File "/home/jamie/Documents/Github/openplaylister/gui/view.py", line 528, in create_generator_page
-    self.combo_gen_mode.addItems([
-AttributeError: 'MainWindow' object has no attribute 'combo_gen_mode'
 
+(python:1192165): Gdk-CRITICAL **: 10:49:11.827: gdk_wayland_window_set_dbus_properties_libgtk_only: assertion 'GDK_IS_WAYLAND_WINDOW (window)' failed
+QThread: Destroyed while thread '' is still running
 
